@@ -7,6 +7,7 @@ from flask import Flask, render_template, request
 import sqlite3
 import re
 import html
+import os
 from pathlib import Path
 from datetime import datetime
 
@@ -17,8 +18,17 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-# Menentukan lokasi database
-LOKASI_DATABASE = Path(__file__).resolve().parent / "portfolio.db"
+# Menentukan lokasi folder proyek
+FOLDER_PROYEK = Path(__file__).resolve().parent
+
+# Menggunakan DATABASE_PATH jika tersedia,
+# atau menggunakan portfolio.db di folder proyek
+LOKASI_DATABASE = Path(
+    os.environ.get(
+        "DATABASE_PATH",
+        str(FOLDER_PROYEK / "portfolio.db")
+    )
+)
 
 
 # ==========================================
@@ -27,22 +37,37 @@ LOKASI_DATABASE = Path(__file__).resolve().parent / "portfolio.db"
 
 def buat_database():
 
+    # Memastikan folder database tersedia
+    LOKASI_DATABASE.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    # Membuat tabel kontak jika belum tersedia
     koneksi = sqlite3.connect(LOKASI_DATABASE)
 
-    cursor = koneksi.cursor()
+    try:
+        cursor = koneksi.cursor()
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS kontak (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nama TEXT NOT NULL,
-            email TEXT NOT NULL,
-            pesan TEXT NOT NULL,
-            tanggal TEXT NOT NULL
-        )
-    """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS kontak (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nama TEXT NOT NULL,
+                email TEXT NOT NULL,
+                pesan TEXT NOT NULL,
+                tanggal TEXT NOT NULL
+            )
+        """)
 
-    koneksi.commit()
-    koneksi.close()
+        koneksi.commit()
+
+    finally:
+        koneksi.close()
+
+
+# Membuat database saat aplikasi diinisialisasi.
+# Ini penting agar database tersedia ketika Gunicorn berjalan.
+buat_database()
 
 
 # ==========================================
@@ -69,6 +94,7 @@ def kontak():
 
     # Memeriksa apakah semua kolom sudah diisi
     if not nama or not email or not pesan:
+
         return halaman_respons(
             "Gagal Mengirim",
             "Semua kolom formulir wajib diisi.",
@@ -77,6 +103,7 @@ def kontak():
 
     # Memeriksa panjang data
     if len(nama) > 100 or len(email) > 254 or len(pesan) > 5000:
+
         return halaman_respons(
             "Gagal Mengirim",
             "Data yang dimasukkan melebihi batas maksimal.",
@@ -87,6 +114,7 @@ def kontak():
     pola_email = r"^[^\s@]+@[^\s@]+\.[^\s@]+$"
 
     if not re.match(pola_email, email):
+
         return halaman_respons(
             "Email Tidak Valid",
             "Silakan masukkan alamat email yang benar.",
@@ -101,16 +129,19 @@ def kontak():
         # Menghubungkan ke database
         koneksi = sqlite3.connect(LOKASI_DATABASE)
 
-        cursor = koneksi.cursor()
+        try:
+            cursor = koneksi.cursor()
 
-        # Menyimpan pesan menggunakan parameter SQL
-        cursor.execute("""
-            INSERT INTO kontak (nama, email, pesan, tanggal)
-            VALUES (?, ?, ?, ?)
-        """, (nama, email, pesan, tanggal))
+            # Menyimpan pesan menggunakan parameter SQL
+            cursor.execute("""
+                INSERT INTO kontak (nama, email, pesan, tanggal)
+                VALUES (?, ?, ?, ?)
+            """, (nama, email, pesan, tanggal))
 
-        koneksi.commit()
-        koneksi.close()
+            koneksi.commit()
+
+        finally:
+            koneksi.close()
 
         return halaman_respons(
             "Pesan Berhasil Dikirim!",
@@ -119,6 +150,8 @@ def kontak():
         )
 
     except sqlite3.Error:
+
+        app.logger.exception("Gagal menyimpan pesan kontak")
 
         return halaman_respons(
             "Terjadi Kesalahan",
@@ -210,11 +243,8 @@ def halaman_respons(judul, pesan, berhasil):
 
 if __name__ == "__main__":
 
-    # Membuat database ketika aplikasi dijalankan
-    buat_database()
-
     app.run(
-        host="127.0.0.1",
-        port=5000,
-        debug=True
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 5000)),
+        debug=False
     )
